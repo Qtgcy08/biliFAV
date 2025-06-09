@@ -93,12 +93,12 @@ def run_nuitka(current_version, new_version):
         "--mingw64",
         "--lto=yes",
         "--show-progress",
-        "--remove-output",
+        #"--remove-output",
         source_file
     ])
 
     # 执行命令并实时输出
-    print("执行命令:", " ".join(cmd))
+    print("执行命令:", " ".join(cmd),f"\n")
     
     process = subprocess.Popen(
         cmd,
@@ -140,7 +140,7 @@ def main():
         new_version = increment_version(current_version)
         
         print(f"当前版本: {current_version}")
-        print(f"将编译为新版本: {new_version}")
+        print(f"将编译为新版本: {new_version}\n")
 
         # 执行编译（使用新版本号）
         exit_code = run_nuitka(current_version, new_version)
