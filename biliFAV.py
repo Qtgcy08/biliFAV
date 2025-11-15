@@ -270,41 +270,86 @@ class BiliFavDownloader:
                 conn.close()
     
     def check_ffmpeg(self):
-        """检查系统上是否安装了FFmpeg"""
+        """检查系统上是否安装了FFmpeg，包括全局搜索和程序目录搜索"""
+        # 1. 首先尝试全局搜索（系统PATH）
+        global_ffmpeg_path = shutil.which("ffmpeg")
+        if global_ffmpeg_path and self._test_ffmpeg_path(global_ffmpeg_path):
+            self.ffmpeg_path = global_ffmpeg_path
+            self.ffmpeg_available = True
+            print(f"FFmpeg检测成功 (全局路径: {self.ffmpeg_path}, 版本: {self.ffmpeg_version})")
+            return
+        
+        # 2. 搜索程序目录下的FFmpeg
+        program_dir = os.path.dirname(os.path.abspath(__file__))
+        local_ffmpeg_path = self._find_ffmpeg_in_directory(program_dir)
+        if local_ffmpeg_path and self._test_ffmpeg_path(local_ffmpeg_path):
+            self.ffmpeg_path = local_ffmpeg_path
+            self.ffmpeg_available = True
+            print(f"FFmpeg检测成功 (程序目录: {self.ffmpeg_path}, 版本: {self.ffmpeg_version})")
+            return
+        
+        # 3. 如果上述方法都失败，尝试直接运行ffmpeg命令
         try:
-            # 尝试运行ffmpeg -version命令
             result = subprocess.run(
-                ["ffmpeg", "-version"], 
-                capture_output=True, 
+                ["ffmpeg", "-version"],
+                capture_output=True,
                 text=True,
                 encoding='utf-8',
                 errors='ignore',
-                creationflags=subprocess.CREATE_NO_WINDOW  # Windows下不创建控制台窗口
+                creationflags=subprocess.CREATE_NO_WINDOW
             )
             if result.returncode == 0:
-                # 解析版本信息
-                version_line = result.stdout.split('\n')[0]
-                parts = version_line.split(' ')
-                version = parts[2] if len(parts) > 2 else "未知"
-                self.ffmpeg_version = version
                 self.ffmpeg_available = True
-                self.ffmpeg_path = shutil.which("ffmpeg")  # 获取ffmpeg路径
-                print(f"FFmpeg检测成功 (版本: {self.ffmpeg_version}, 路径: {self.ffmpeg_path})")
+                self.ffmpeg_path = "ffmpeg"  # 使用命令名称
+                self._parse_ffmpeg_version(result.stdout)
+                print(f"FFmpeg检测成功 (命令方式, 版本: {self.ffmpeg_version})")
                 return
+        except Exception:
+            pass
         
-        except Exception as e:
-            print(f"FFmpeg检测异常: {str(e)}")
+        # 4. 所有方法都失败
+        print("警告: 未检测到FFmpeg，DASH格式视频将无法合并音频")
+        print("   请安装FFmpeg并添加到系统PATH，或放置在程序目录下")
+        print("   下载地址：https://ffmpeg.org/download.html")
+        self.ffmpeg_available = False
+    
+    def _find_ffmpeg_in_directory(self, directory: str) -> Optional[str]:
+        """在指定目录中搜索FFmpeg可执行文件"""
+        ffmpeg_names = ["ffmpeg", "ffmpeg.exe", "ffmpeg.bat"]
         
-        # 如果上述方法失败，尝试直接查找ffmpeg路径
-        ffmpeg_path = shutil.which("ffmpeg")
-        if ffmpeg_path:
-            self.ffmpeg_path = ffmpeg_path
-            self.ffmpeg_available = True
-            print(f"FFmpeg检测成功 (路径: {ffmpeg_path})")
-        else:
-            print("警告: 未检测到FFmpeg，DASH格式视频将无法合并音频")
-            print("   请安装FFmpeg并添加到系统PATH：https://ffmpeg.org/download.html")
-            self.ffmpeg_available = False
+        for root, dirs, files in os.walk(directory):
+            for file in files:
+                if file.lower() in ffmpeg_names:
+                    return os.path.join(root, file)
+        
+        return None
+    
+    def _test_ffmpeg_path(self, ffmpeg_path: str) -> bool:
+        """测试FFmpeg路径是否有效"""
+        try:
+            result = subprocess.run(
+                [ffmpeg_path, "-version"],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore',
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            if result.returncode == 0:
+                self._parse_ffmpeg_version(result.stdout)
+                return True
+        except Exception:
+            pass
+        return False
+    
+    def _parse_ffmpeg_version(self, version_output: str):
+        """解析FFmpeg版本信息"""
+        try:
+            version_line = version_output.split('\n')[0]
+            parts = version_line.split(' ')
+            self.ffmpeg_version = parts[2] if len(parts) > 2 else "未知"
+        except Exception:
+            self.ffmpeg_version = "未知"
     
     def start_merge_thread(self):
         """启动后台合并线程"""
@@ -883,6 +928,93 @@ class BiliFavDownloader:
             print(f"获取视频信息失败: {str(e)}")
             return None
 
+    async def get_video_pages(self, session: httpx.AsyncClient, bvid: str) -> Optional[List[Dict]]:
+        """获取视频的所有分P信息"""
+        try:
+            video_info = await self.get_video_info(session, bvid)
+            if not video_info:
+                return None
+            
+            # 检查是否有多个分P
+            pages = video_info.get("pages", [])
+            if len(pages) > 1:
+                return pages
+            else:
+                # 单分P视频，返回包含主分P的列表
+                return [{
+                    "cid": video_info["cid"],
+                    "page": 1,
+                    "part": video_info.get("title", "主视频"),
+                    "duration": video_info.get("duration", 0)
+                }]
+        except Exception as e:
+            print(f"获取视频分P信息失败: {str(e)}")
+            return None
+
+    def parse_page_selection(self, input_str: str, total_pages: int) -> Optional[List[int]]:
+        """
+        解析用户的分P选择输入
+        参数:
+            input_str: 用户输入字符串
+            total_pages: 总分P数量
+        返回:
+            List[int]: 选中的分P索引列表，None表示取消
+        """
+        if not input_str:
+            return list(range(1, total_pages + 1))  # 默认下载所有
+        
+        input_str = input_str.strip().lower()
+        
+        # 处理特殊命令
+        if input_str in ['a', 'all', '所有']:
+            return list(range(1, total_pages + 1))
+        elif input_str in ['c', 'cancel', '取消']:
+            return None
+        
+        # 替换中文逗号为英文逗号
+        input_str = input_str.replace('，', ',')
+        # 替换中文破折号为英文连字符
+        input_str = input_str.replace('—', '-')
+        
+        selected_pages = set()
+        
+        try:
+            # 解析逗号分隔的多个选择
+            parts = input_str.split(',')
+            for part in parts:
+                part = part.strip()
+                if not part:
+                    continue
+                    
+                # 检查是否是范围选择 (如: 1-5)
+                if '-' in part:
+                    range_parts = part.split('-')
+                    if len(range_parts) == 2:
+                        start = int(range_parts[0].strip())
+                        end = int(range_parts[1].strip())
+                        if 1 <= start <= total_pages and 1 <= end <= total_pages and start <= end:
+                            selected_pages.update(range(start, end + 1))
+                        else:
+                            print(f"无效范围: {part}")
+                            return None
+                    else:
+                        print(f"无效范围格式: {part}")
+                        return None
+                else:
+                    # 单个数字
+                    page_num = int(part)
+                    if 1 <= page_num <= total_pages:
+                        selected_pages.add(page_num)
+                    else:
+                        print(f"无效分P号: {page_num}")
+                        return None
+                        
+            return sorted(list(selected_pages))
+            
+        except ValueError:
+            print("输入格式错误，请使用数字、逗号或连字符")
+            return None
+
     async def get_video_url(self, session: httpx.AsyncClient, bvid: str, cid: int, quality: int = 80) -> Optional[Dict]:
         """
         获取视频播放URL
@@ -1087,98 +1219,139 @@ class BiliFavDownloader:
         global interrupted
         
         try:
-            # 清理和缩短文件名
-            safe_title = sanitize_filename(title)
-            safe_title = shorten_filename(safe_title)
-            file_path = os.path.join(output_path, f"{safe_title}_{bvid}.mp4")
-            
-            # 处理已存在文件
-            if overwrite and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                    print(f"已删除旧文件: {title} ({bvid})")
-                except Exception as e:
-                    print(f"删除旧文件失败: {title} ({bvid}) - {str(e)}")
-                    return False
-            
-            # 获取视频信息
-            video_info = await self.get_video_info(session, bvid)
-            if not video_info:
+            # 获取视频的所有分P信息
+            pages = await self.get_video_pages(session, bvid)
+            if not pages:
                 print(f"跳过视频: {title} ({bvid}) - 无法获取视频信息")
                 return False
             
-            # 获取视频CID
-            cid = video_info["cid"]
-            
-            # 获取媒体URL
-            media_info = await self.get_video_url(session, bvid, cid, quality)
-            if not media_info:
-                print(f"跳过视频: {title} ({bvid}) - 无法获取下载链接")
-                return False
-            
-            # 创建输出目录
-            os.makedirs(output_path, exist_ok=True)
-            
-            # 构建请求头
-            headers = {
-                "User-Agent": HEADERS["User-Agent"],
-                "Referer": "https://www.bilibili.com",
-                "Cookie": "; ".join([f"{k}={v}" for k, v in session.cookies.items()])
-            }
-            
-            # 下载视频文件
-            video_url = media_info["video_url"]
-            video_file = os.path.join(output_path, f"{safe_title}_{bvid}_video.tmp")
-            
-            # 下载视频
-            video_success = await self.download_file(
-                video_url, video_file, title, "视频", headers
-            )
-            
-            if not video_success:
-                return False
-            
-            # 下载音频文件（如果是DASH格式）
-            audio_file = None
-            audio_success = True
-            
-            if media_info["audio_url"] and self.ffmpeg_available:
-                audio_url = media_info["audio_url"]
-                audio_file = os.path.join(output_path, f"{safe_title}_{bvid}_audio.tmp")
+            # 如果是多分P视频，让用户选择要下载的分P
+            selected_cids = []
+            if len(pages) > 1:
+                print(f"\n检测到多分P视频: {title} ({bvid})")
+                print("分P列表:")
+                for i, page in enumerate(pages, 1):
+                    duration_min = page.get("duration", 0) // 60
+                    duration_sec = page.get("duration", 0) % 60
+                    print(f"  {i}. {page.get('part', f'分P{i}')} ({duration_min}:{duration_sec:02d})")
                 
-                # 下载音频
-                audio_success = await self.download_file(
-                    audio_url, audio_file, title, "音频", headers
-                )
-            
-            # 处理音频下载失败情况
-            if not audio_success:
-                if os.path.exists(video_file):
-                    try:
-                        os.rename(video_file, file_path)
-                        print(f"音频下载失败，已保存视频文件: {title}")
-                        return True
-                    except Exception as e:
-                        print(f"重命名视频文件失败: {title} - {str(e)}")
+                print("\n请选择要下载的分P:")
+                print("  [a/所有/all] 下载所有分P")
+                print("  [c/取消/cancel] 取消下载")
+                print("  [数字] 下载指定分P (如: 1, 2, 3)")
+                print("  [范围] 下载范围分P (如: 1-5)")
+                print("  [混合] 混合选择 (如: 1,3,5-7)")
+                print("请输入选择 (默认下载所有): ", end="", flush=True)
+                
+                choice = input().strip()
+                
+                # 解析用户选择
+                selected_indices = self.parse_page_selection(choice, len(pages))
+                
+                if selected_indices is None:
+                    if choice and choice not in ['c', 'cancel', '取消']:
+                        print("输入无效，将下载所有分P")
+                        selected_indices = list(range(1, len(pages) + 1))
+                    else:
+                        print("取消下载")
                         return False
-                return False
-            
-            # 处理音视频合并
-            if audio_file and os.path.exists(audio_file):
-                # 加入合并队列
-                self.queue_merge_task(video_file, audio_file, file_path, title, bvid)
-                return True
+                
+                # 根据选择的索引获取对应的分P
+                selected_cids = [(pages[idx-1]["cid"], pages[idx-1].get("part", f"分P{idx}")) for idx in selected_indices]
+                print(f"将下载 {len(selected_cids)} 个分P: {', '.join(map(str, selected_indices))}")
             else:
-                # 非DASH格式，直接重命名视频文件
-                if os.path.exists(video_file):
+                # 单分P视频
+                selected_cids = [(pages[0]["cid"], title)]
+            
+            # 下载选中的分P
+            success_count = 0
+            for cid, part_title in selected_cids:
+                if interrupted:
+                    break
+                
+                # 为每个分P生成独立的文件名
+                safe_title = sanitize_filename(part_title)
+                safe_title = shorten_filename(safe_title)
+                file_path = os.path.join(output_path, f"{safe_title}_{bvid}.mp4")
+                
+                # 处理已存在文件
+                if overwrite and os.path.exists(file_path):
                     try:
-                        os.rename(video_file, file_path)
-                        print(f"下载完成: {title} ({bvid})")
-                        return True
+                        os.remove(file_path)
+                        print(f"已删除旧文件: {part_title} ({bvid})")
                     except Exception as e:
-                        print(f"重命名视频文件失败: {title} - {str(e)}")
-                        return False
-                return False
+                        print(f"删除旧文件失败: {part_title} ({bvid}) - {str(e)}")
+                        continue
+                
+                # 获取媒体URL
+                media_info = await self.get_video_url(session, bvid, cid, quality)
+                if not media_info:
+                    print(f"跳过分P: {part_title} ({bvid}) - 无法获取下载链接")
+                    continue
+                
+                # 创建输出目录
+                os.makedirs(output_path, exist_ok=True)
+                
+                # 构建请求头
+                headers = {
+                    "User-Agent": HEADERS["User-Agent"],
+                    "Referer": "https://www.bilibili.com",
+                    "Cookie": "; ".join([f"{k}={v}" for k, v in session.cookies.items()])
+                }
+                
+                # 下载视频文件
+                video_url = media_info["video_url"]
+                video_file = os.path.join(output_path, f"{safe_title}_{bvid}_video.tmp")
+                
+                # 下载视频
+                video_success = await self.download_file(
+                    video_url, video_file, part_title, "视频", headers
+                )
+                
+                if not video_success:
+                    continue
+                
+                # 下载音频文件（如果是DASH格式）
+                audio_file = None
+                audio_success = True
+                
+                if media_info["audio_url"] and self.ffmpeg_available:
+                    audio_url = media_info["audio_url"]
+                    audio_file = os.path.join(output_path, f"{safe_title}_{bvid}_audio.tmp")
+                    
+                    # 下载音频
+                    audio_success = await self.download_file(
+                        audio_url, audio_file, part_title, "音频", headers
+                    )
+                
+                # 处理音频下载失败情况
+                if not audio_success:
+                    if os.path.exists(video_file):
+                        try:
+                            os.rename(video_file, file_path)
+                            print(f"音频下载失败，已保存视频文件: {part_title}")
+                            success_count += 1
+                        except Exception as e:
+                            print(f"重命名视频文件失败: {part_title} - {str(e)}")
+                    continue
+                
+                # 处理音视频合并
+                if audio_file and os.path.exists(audio_file):
+                    # 加入合并队列
+                    if self.queue_merge_task(video_file, audio_file, file_path, part_title, bvid):
+                        success_count += 1
+                else:
+                    # 非DASH格式，直接重命名视频文件
+                    if os.path.exists(video_file):
+                        try:
+                            os.rename(video_file, file_path)
+                            print(f"下载完成: {part_title} ({bvid})")
+                            success_count += 1
+                        except Exception as e:
+                            print(f"重命名视频文件失败: {part_title} - {str(e)}")
+            
+            return success_count > 0
+            
         except Exception as e:
             print(f"下载失败: {title} ({bvid}) - {str(e)}")
             return False
@@ -1497,28 +1670,28 @@ class BiliFavDownloader:
                 print("初始化后检测到中断，退出程序")
                 return
                 
-            # 获取并更新收藏夹数据
-            success = await self.fetch_and_update_favorites(session)
-            
-            if interrupted:
-                print("获取收藏夹后检测到中断，退出程序")
-                return
+            # 主操作循环
+            while not interrupted:
+                print("\n请选择操作: 1. 下载收藏夹视频  2. 直接下载视频  3. 退出")
+                print("请输入选项 (默认1): ", end="")
                 
-            # 显示收藏夹内容并提供操作选项
-            if success and self.all_data:
-                print("\n收藏夹内容:")
-                self.print_tree(self.all_data)
+                choice = input().strip()
+                if not choice:
+                    choice = "1"
                 
-                # 主操作循环
-                while not interrupted:
-                    print("\n请选择操作: 1. 下载收藏夹视频  2. 退出")
-                    print("请输入选项 (默认1): ", end="")
+                if choice == "1":
+                    # 获取并更新收藏夹数据
+                    success = await self.fetch_and_update_favorites(session)
                     
-                    choice = input().strip()
-                    if not choice:
-                        choice = "1"
-                    
-                    if choice == "1":
+                    if interrupted:
+                        print("获取收藏夹后检测到中断，退出程序")
+                        break
+                        
+                    # 显示收藏夹内容
+                    if success and self.all_data:
+                        print("\n收藏夹内容:")
+                        self.print_tree(self.all_data)
+                        
                         # 显示收藏夹列表
                         print("\n收藏夹列表:")
                         for folder in self.all_data:
@@ -1586,16 +1759,331 @@ class BiliFavDownloader:
                             break
                         
                         await self.download_favorite_videos(session, fav_id, output_dir, quality)
-                    elif choice == "2":
-                        print("退出程序")
-                        break
                     else:
-                        print("无效选项，请重新输入")
-            else:
-                print("未能获取收藏夹数据")
+                        print("未能获取收藏夹数据")
+                elif choice == "2":
+                    await self.download_single_video_direct(session)
+                elif choice == "3":
+                    print("退出程序")
+                    break
+                else:
+                    print("无效选项，请重新输入")
     
         # 停止合并线程
         self.stop_merge_thread()
+
+    def extract_bvid_from_input(self, input_str: str) -> Optional[str]:
+        """
+        从用户输入中提取BV号
+        支持格式:
+        - BV号: BV1zsnBzGEzC
+        - 完整链接: https://www.bilibili.com/video/BV1zsnBzGEzC/
+        - 完整链接: www.bilibili.com/video/BV1zsnBzGEzC/
+        - 部分链接: bilibili.com/video/BV1zsnBzGEzC
+        - 部分链接: /video/BV1zsnBzGEzC
+        - 部分链接: video/BV1zsnBzGEzC
+        - 部分链接: com/video/BV1zsnBzGEzC
+        - 带参数链接: BV1zsnBzGEzC?spm_id_from=333.788
+        - CID: 直接使用CID
+        """
+        if not input_str:
+            return None
+        
+        input_str = input_str.strip()
+        
+        # 1. 检查是否是纯BV号格式
+        if input_str.startswith('BV') and len(input_str) >= 10:
+            # 处理带参数的BV号，如: BV1zsnBzGEzC?spm_id_from=333.788
+            if '?' in input_str:
+                return input_str.split('?')[0]
+            return input_str
+        
+        # 2. 使用正则表达式从各种格式中提取BV号
+        import re
+        pattern = r'BV[a-zA-Z0-9]{10,}'
+        match = re.search(pattern, input_str)
+        if match:
+            bvid = match.group()
+            # 验证提取的BV号是否有效
+            if bvid.startswith('BV') and len(bvid) >= 10:
+                return bvid
+        
+        # 3. 如果是纯数字，可能是CID，返回None让调用方处理
+        if input_str.isdigit():
+            return None
+        
+        return None
+
+    async def download_single_video_direct(self, session: httpx.AsyncClient):
+        """
+        直接下载单个视频
+        支持输入: BV号、链接、CID
+        """
+        global interrupted
+        
+        print("\n直接下载视频")
+        print("支持输入格式:")
+        print("  - BV号: BV1zsnBzGEzC")
+        print("  - 完整链接: https://www.bilibili.com/video/BV1zsnBzGEzC/")
+        print("  - 部分链接: com/video/BV1zsnBzGEzC")
+        print("  - 带参数链接: BV1zsnBzGEzC?spm_id_from=333.788")
+        print("  - CID: 直接输入CID")
+        print("说明: 只要包含完整的BV号即可识别")
+        
+        while True:
+            print("\n请输入视频标识 (输入'q'返回主菜单): ", end="")
+            video_input = input().strip()
+            
+            if video_input.lower() == 'q':
+                return
+            
+            if not video_input:
+                print("输入不能为空")
+                continue
+            
+            # 提取BV号
+            bvid = self.extract_bvid_from_input(video_input)
+            
+            if bvid:
+                # 使用BV号下载
+                print(f"检测到BV号: {bvid}")
+                await self.download_by_bvid(session, bvid)
+                break
+            elif video_input.isdigit():
+                # 使用CID下载
+                cid = int(video_input)
+                print(f"使用CID: {cid}")
+                await self.download_by_cid(session, cid)
+                break
+            else:
+                print("无法识别输入格式，请重新输入")
+
+    async def download_by_bvid(self, session: httpx.AsyncClient, bvid: str):
+        """通过BV号下载视频"""
+        global interrupted
+        
+        # 获取视频信息
+        video_info = await self.get_video_info(session, bvid)
+        if not video_info:
+            print(f"无法获取视频信息: {bvid}")
+            return
+        
+        title = video_info.get("title", "未知标题")
+        print(f"视频标题: {title}")
+        
+        # 获取清晰度
+        quality_options = list(QUALITY_MAP.keys())
+        print("\n可用清晰度:")
+        for i, q in enumerate(quality_options, 1):
+            print(f"{i}. {q}")
+        
+        default_quality_index = quality_options.index('1080P') + 1 if '1080P' in quality_options else 4
+        print(f"请选择清晰度 (1-{len(quality_options)}, 默认{default_quality_index}): ", end="")
+        quality_choice = input().strip()
+        
+        if not quality_choice:
+            quality_choice = str(default_quality_index)
+        
+        if quality_choice.isdigit():
+            choice_index = int(quality_choice) - 1
+            if 0 <= choice_index < len(quality_options):
+                quality = quality_options[choice_index]
+            else:
+                print(f"输入超出范围，使用默认{quality_options[default_quality_index-1]}")
+                quality = quality_options[default_quality_index-1]
+        else:
+            print(f"无效输入，使用默认{quality_options[default_quality_index-1]}")
+            quality = quality_options[default_quality_index-1]
+        
+        # 非会员清晰度调整
+        if not self.is_member and QUALITY_MAP.get(quality, 0) > NON_MEMBER_MAX_QUALITY:
+            print(f"普通账号最高支持1080P，已自动调整为1080P")
+            quality = "1080P"
+        
+        # 获取输出目录
+        print("请输入下载路径 (默认./direct_download): ", end="")
+        output_dir = input().strip() or "./direct_download"
+        
+        # 创建输出目录
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 获取清晰度代码
+        quality_code = QUALITY_MAP.get(quality, 80)
+        
+        # 下载视频
+        success = await self.download_single_video(
+            session, bvid, title, output_dir, quality_code, False
+        )
+        
+        if success:
+            print(f"视频下载完成: {title}")
+        else:
+            print(f"视频下载失败: {title}")
+
+    async def download_by_cid(self, session: httpx.AsyncClient, cid: int):
+        """通过CID下载视频"""
+        global interrupted
+        
+        print("通过CID下载功能需要BV号信息，请先提供BV号")
+        print("请输入BV号: ", end="")
+        bvid = input().strip()
+        
+        if not bvid.startswith('BV'):
+            print("无效的BV号格式")
+            return
+        
+        # 获取视频信息验证CID
+        video_info = await self.get_video_info(session, bvid)
+        if not video_info:
+            print(f"无法获取视频信息: {bvid}")
+            return
+        
+        # 检查CID是否有效
+        pages = await self.get_video_pages(session, bvid)
+        valid_cids = [page["cid"] for page in pages]
+        
+        if cid not in valid_cids:
+            print(f"CID {cid} 在视频 {bvid} 中不存在")
+            print(f"有效的CID: {valid_cids}")
+            return
+        
+        # 找到对应的分P标题
+        part_title = "未知分P"
+        for page in pages:
+            if page["cid"] == cid:
+                part_title = page.get("part", "未知分P")
+                break
+        
+        print(f"找到分P: {part_title} (CID: {cid})")
+        
+        # 获取清晰度
+        quality_options = list(QUALITY_MAP.keys())
+        print("\n可用清晰度:")
+        for i, q in enumerate(quality_options, 1):
+            print(f"{i}. {q}")
+        
+        default_quality_index = quality_options.index('1080P') + 1 if '1080P' in quality_options else 4
+        print(f"请选择清晰度 (1-{len(quality_options)}, 默认{default_quality_index}): ", end="")
+        quality_choice = input().strip()
+        
+        if not quality_choice:
+            quality_choice = str(default_quality_index)
+        
+        if quality_choice.isdigit():
+            choice_index = int(quality_choice) - 1
+            if 0 <= choice_index < len(quality_options):
+                quality = quality_options[choice_index]
+            else:
+                print(f"输入超出范围，使用默认{quality_options[default_quality_index-1]}")
+                quality = quality_options[default_quality_index-1]
+        else:
+            print(f"无效输入，使用默认{quality_options[default_quality_index-1]}")
+            quality = quality_options[default_quality_index-1]
+        
+        # 非会员清晰度调整
+        if not self.is_member and QUALITY_MAP.get(quality, 0) > NON_MEMBER_MAX_QUALITY:
+            print(f"普通账号最高支持1080P，已自动调整为1080P")
+            quality = "1080P"
+        
+        # 获取输出目录
+        print("请输入下载路径 (默认./direct_download): ", end="")
+        output_dir = input().strip() or "./direct_download"
+        
+        # 创建输出目录
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 获取清晰度代码
+        quality_code = QUALITY_MAP.get(quality, 80)
+        
+        # 下载指定分P
+        success = await self.download_single_video_by_cid(
+            session, bvid, cid, part_title, output_dir, quality_code
+        )
+        
+        if success:
+            print(f"分P下载完成: {part_title}")
+        else:
+            print(f"分P下载失败: {part_title}")
+
+    async def download_single_video_by_cid(self, session: httpx.AsyncClient, bvid: str, cid: int, title: str, output_path: str, quality: int) -> bool:
+        """通过CID下载单个分P视频"""
+        global interrupted
+        
+        try:
+            # 为分P生成独立的文件名
+            safe_title = sanitize_filename(title)
+            safe_title = shorten_filename(safe_title)
+            file_path = os.path.join(output_path, f"{safe_title}_{bvid}.mp4")
+            
+            # 获取媒体URL
+            media_info = await self.get_video_url(session, bvid, cid, quality)
+            if not media_info:
+                print(f"跳过分P: {title} ({bvid}) - 无法获取下载链接")
+                return False
+            
+            # 构建请求头
+            headers = {
+                "User-Agent": HEADERS["User-Agent"],
+                "Referer": "https://www.bilibili.com",
+                "Cookie": "; ".join([f"{k}={v}" for k, v in session.cookies.items()])
+            }
+            
+            # 下载视频文件
+            video_url = media_info["video_url"]
+            video_file = os.path.join(output_path, f"{safe_title}_{bvid}_video.tmp")
+            
+            # 下载视频
+            video_success = await self.download_file(
+                video_url, video_file, title, "视频", headers
+            )
+            
+            if not video_success:
+                return False
+            
+            # 下载音频文件（如果是DASH格式）
+            audio_file = None
+            audio_success = True
+            
+            if media_info["audio_url"] and self.ffmpeg_available:
+                audio_url = media_info["audio_url"]
+                audio_file = os.path.join(output_path, f"{safe_title}_{bvid}_audio.tmp")
+                
+                # 下载音频
+                audio_success = await self.download_file(
+                    audio_url, audio_file, title, "音频", headers
+                )
+            
+            # 处理音频下载失败情况
+            if not audio_success:
+                if os.path.exists(video_file):
+                    try:
+                        os.rename(video_file, file_path)
+                        print(f"音频下载失败，已保存视频文件: {title}")
+                        return True
+                    except Exception as e:
+                        print(f"重命名视频文件失败: {title} - {str(e)}")
+                return False
+            
+            # 处理音视频合并
+            if audio_file and os.path.exists(audio_file):
+                # 加入合并队列
+                if self.queue_merge_task(video_file, audio_file, file_path, title, bvid):
+                    return True
+            else:
+                # 非DASH格式，直接重命名视频文件
+                if os.path.exists(video_file):
+                    try:
+                        os.rename(video_file, file_path)
+                        print(f"下载完成: {title} ({bvid})")
+                        return True
+                    except Exception as e:
+                        print(f"重命名视频文件失败: {title} - {str(e)}")
+            
+            return False
+            
+        except Exception as e:
+            print(f"下载失败: {title} ({bvid}) - {str(e)}")
+            return False
 
 # ========================
 # 程序入口

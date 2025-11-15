@@ -90,7 +90,8 @@ def run_nuitka(current_version, new_version):
         f"--windows-product-version={new_version}",  # 使用新版本号
         "--windows-file-description=哔哩哔哩收藏夹下载工具，支持扫描登录，使用sqlite3保存收藏夹数据，使用ffmpeg合并音视频，请确保ffmpeg已添加到系统PATH",
         "--follow-imports",
-        "--mingw64",
+        #"--clang",
+        "--msvc=latest",
         "--lto=yes",
         "--show-progress",
         #"--remove-output",

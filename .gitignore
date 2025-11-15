@@ -1,4 +1,41 @@
+# 用户数据和配置文件
 bili_token.toml
-.get_my_favourite.sqlite 
+.get_my_favourite.sqlite
+
+# 下载目录
 favourite_download/
+direct_download/
+
+# 编译输出
 exe/
+biliFAV_win_x64_*.exe
+
+# 导出文件
+favorites_export.txt
+favorites_export.json
+export_favorites.bat
+
+# Python环境
+.venv/
+__pycache__/
+*.pyc
+.python-version
+
+# 包管理文件
+uv.lock
+uv.toml
+
+# 临时文件和日志
+*.log
+*.tmp
+*.temp
+
+# IDE和编辑器文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
