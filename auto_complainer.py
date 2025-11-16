@@ -7,17 +7,20 @@ import shutil
 import platform
 
 def read_current_version():
-    """读取当前版本号 (格式: X.Y.Z)"""
+    """从pyproject.toml读取当前版本号 (格式: X.Y.Z)"""
     try:
-        with open("complainer_count.txt", "r", encoding="utf-8") as f:
-            content = f.read().strip()
-            match = re.match(r"(\d+\.\d+\.\d+)", content)
+        with open("pyproject.toml", "r", encoding="utf-8") as f:
+            content = f.read()
+            # 使用正则表达式匹配版本号
+            match = re.search(r'version\s*=\s*"([^"]+)"', content)
             if match:
-                return match.group(1)
+                version = match.group(1)
+                if validate_version_format(version):
+                    return version
     except FileNotFoundError:
         pass
     # 默认版本号
-    return "5.21.1"
+    return "7.12.1"
 
 def increment_version(version):
     """版本号自增 (格式: X.Y.Z)"""
@@ -25,10 +28,30 @@ def increment_version(version):
     parts[-1] += 1  # 最后一位自增
     return ".".join(map(str, parts))
 
+def validate_version_format(version):
+    """验证版本号格式是否正确"""
+    return bool(re.match(r"^\d+\.\d+\.\d+$", version))
+
 def write_new_version(version):
-    """写入新版本号"""
-    with open("complainer_count.txt", "w", encoding="utf-8") as f:
-        f.write(version)
+    """写入新版本号到pyproject.toml"""
+    try:
+        with open("pyproject.toml", "r", encoding="utf-8") as f:
+            content = f.read()
+        
+        # 替换版本号
+        new_content = re.sub(
+            r'version\s*=\s*"[^"]+"',
+            f'version = "{version}"',
+            content
+        )
+        
+        with open("pyproject.toml", "w", encoding="utf-8") as f:
+            f.write(new_content)
+        
+        print(f"[✓] 已更新pyproject.toml版本号为: {version}")
+    except Exception as e:
+        print(f"[!] 更新pyproject.toml版本号失败: {str(e)}")
+        raise
 
 def find_nuitka():
     """尝试找到nuitka可执行文件路径"""
@@ -85,10 +108,9 @@ def run_nuitka(current_version, new_version):
         "--standalone",
         f"--output-dir={exe_dir}",
         f"--output-filename={output_filename}",
-        "--windows-company-name=依轨泠QTY",
-        "--windows-product-name=哔哩哔哩收藏夹下载工具",
+        "--windows-product-name=Bilibili Favorite Downloader",
         f"--windows-product-version={new_version}",  # 使用新版本号
-        "--windows-file-description=哔哩哔哩收藏夹下载工具，支持扫描登录，使用sqlite3保存收藏夹数据，使用ffmpeg合并音视频，请确保ffmpeg已添加到系统PATH",
+        "--windows-file-description=Bilibili favorite video downloader with QR code login, SQLite database, and FFmpeg audio/video merging",
         "--follow-imports",
         #"--clang",
         "--msvc=latest",
@@ -138,6 +160,13 @@ def main():
     try:
         # 读取当前版本号
         current_version = read_current_version()
+        
+        # 验证版本格式
+        if not validate_version_format(current_version):
+            print(f"[!] 当前版本号格式无效: {current_version}")
+            print("版本号格式应为: X.Y.Z (例如: 7.12.1)")
+            sys.exit(1)
+        
         new_version = increment_version(current_version)
         
         print(f"当前版本: {current_version}")
@@ -153,6 +182,13 @@ def main():
             # 显示输出文件路径
             exe_path = Path("./exe") / f"biliFAV_win_x64_{new_version}.exe"
             print(f"已生成可执行文件: {exe_path}")
+            
+            # 验证版本更新
+            updated_version = read_current_version()
+            if updated_version == new_version:
+                print(f"[✓] 版本文件更新验证成功: {updated_version}")
+            else:
+                print(f"[!] 版本文件更新异常: 期望 {new_version}, 实际 {updated_version}")
         else:
             print(f"\n[×] 编译失败，保持版本号不变 (退出码: {exit_code})")
             sys.exit(1)
