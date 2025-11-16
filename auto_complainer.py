@@ -5,6 +5,11 @@ import subprocess
 from pathlib import Path
 import shutil
 import platform
+import io
+
+# 强制设置UTF-8编码环境
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 def read_current_version():
     """从pyproject.toml读取当前版本号 (格式: X.Y.Z)"""
@@ -48,9 +53,9 @@ def write_new_version(version):
         with open("pyproject.toml", "w", encoding="utf-8") as f:
             f.write(new_content)
         
-        print(f"[✓] 已更新pyproject.toml版本号为: {version}")
+        print(f"[OK] Updated pyproject.toml version to: {version}")
     except Exception as e:
-        print(f"[!] 更新pyproject.toml版本号失败: {str(e)}")
+        print(f"[ERROR] Failed to update pyproject.toml version: {str(e)}")
         raise
 
 def find_nuitka():
@@ -75,7 +80,7 @@ def find_nuitka():
     if os.path.exists(nuitka_path):
         return nuitka_path
     
-    raise FileNotFoundError("无法找到nuitka可执行文件。请确保已安装Nuitka (pip install nuitka)")
+    raise FileNotFoundError("Cannot find nuitka executable. Please ensure Nuitka is installed (pip install nuitka)")
 
 def run_nuitka(current_version, new_version):
     """执行Nuitka编译命令"""
@@ -87,16 +92,16 @@ def run_nuitka(current_version, new_version):
     exe_dir = Path("./exe")
     exe_dir.mkdir(parents=True, exist_ok=True)
     
-    # 检测系统架构并生成输出文件名
+    # 检测系统架构并生成输出文件名 (Windows只支持x64和arm64)
     arch = platform.machine().lower()
     if arch in ['amd64', 'x86_64']:
         arch_name = "x64"
-    elif arch in ['i386', 'i686', 'x86']:
-        arch_name = "x86"
     elif arch in ['arm64', 'aarch64']:
         arch_name = "arm64"
     else:
-        arch_name = arch
+        # 默认使用x64，因为x86不再支持Python
+        arch_name = "x64"
+        print(f"Warning: Unknown architecture '{arch}' detected, defaulting to x64")
     
     # 生成带新版本号和架构的输出文件名
     output_filename = f"biliFAV_win_{arch_name}_{new_version}.exe"
@@ -132,7 +137,7 @@ def run_nuitka(current_version, new_version):
     ])
 
     # 执行命令并实时输出
-    print("执行命令:", " ".join(cmd),f"\n")
+    print("Executing command:", " ".join(cmd),f"\n")
     
     process = subprocess.Popen(
         cmd,
@@ -155,7 +160,7 @@ def run_nuitka(current_version, new_version):
                 print(output.strip())
         return process.poll()
     except KeyboardInterrupt:
-        print("\n[!] 检测到中断信号，终止编译过程...")
+        print("\n[!] Interrupt signal detected, terminating compilation process...")
         process.terminate()
         return 1
     finally:
@@ -174,40 +179,40 @@ def main():
         
         # 验证版本格式
         if not validate_version_format(current_version):
-            print(f"[!] 当前版本号格式无效: {current_version}")
-            print("版本号格式应为: X.Y.Z (例如: 7.12.1)")
+            print(f"[ERROR] Invalid version format: {current_version}")
+            print("Version format should be: X.Y.Z (e.g., 7.12.1)")
             sys.exit(1)
         
         new_version = increment_version(current_version)
         
-        print(f"当前版本: {current_version}")
-        print(f"将编译为新版本: {new_version}\n")
+        print(f"Current version: {current_version}")
+        print(f"Will compile as new version: {new_version}\n")
 
         # 执行编译（使用新版本号）
         exit_code = run_nuitka(current_version, new_version)
         
         if exit_code == 0:
-            print(f"\n[✓] 编译成功，更新版本号为: {new_version}")
+            print(f"\n[OK] Compilation successful, updating version to: {new_version}")
             write_new_version(new_version)
             
             # 显示输出文件路径
             exe_path = Path("./exe") / f"biliFAV_win_x64_{new_version}.exe"
-            print(f"已生成可执行文件: {exe_path}")
+            print(f"Generated executable: {exe_path}")
             
             # 验证版本更新
             updated_version = read_current_version()
             if updated_version == new_version:
-                print(f"[✓] 版本文件更新验证成功: {updated_version}")
+                print(f"[OK] Version file update verified: {updated_version}")
             else:
-                print(f"[!] 版本文件更新异常: 期望 {new_version}, 实际 {updated_version}")
+                print(f"[ERROR] Version file update mismatch: expected {new_version}, got {updated_version}")
         else:
-            print(f"\n[×] 编译失败，保持版本号不变 (退出码: {exit_code})")
+            print(f"\n[FAILED] Compilation failed, keeping version unchanged (exit code: {exit_code})")
             sys.exit(1)
 
     except Exception as e:
-        print(f"\n[!] 发生错误: {str(e)}")
-        print("请确保已安装Nuitka: pip install nuitka")
-        print("如果已安装，请尝试将Python脚本目录添加到PATH环境变量")
+        print(f"\n[ERROR] An error occurred: {str(e)}")
+        print("Please ensure Nuitka is installed: pip install nuitka")
+        print("If already installed, try adding Python scripts directory to PATH environment variable")
         sys.exit(1)
 
 if __name__ == "__main__":
