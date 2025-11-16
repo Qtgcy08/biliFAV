@@ -133,6 +133,7 @@ def run_nuitka(current_version, new_version):
         "--lto=yes",
         "--show-progress",
         #"--remove-output",
+        "--disable-dll-dependency-cache",  # Disable dependency analysis to avoid Dependency Walker issues
         source_file
     ])
 
