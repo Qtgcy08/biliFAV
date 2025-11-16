@@ -1,0 +1,90 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches: [ master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build-windows-x64:
+    name: Build Windows x64 Executable
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.13'
+        
+    - name: Install uv
+      run: |
+        pip install uv
+        uv --version
+        
+    - name: Install dependencies
+      run: |
+        uv sync
+        
+    - name: Install Nuitka
+      run: |
+        uv add nuitka
+        
+    - name: Build executable
+      run: |
+        uv run python auto_complainer.py
+        
+    - name: Upload executable artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: biliFAV-windows-x64
+        path: exe/
+        retention-days: 30
+
+  build-windows-arm64:
+    name: Build Windows ARM64 Executable
+    runs-on: windows-latest
+    
+    strategy:
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: ARM64
+            
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.13'
+        
+    - name: Install uv
+      run: |
+        pip install uv
+        uv --version
+        
+    - name: Install dependencies
+      run: |
+        uv sync
+        
+    - name: Install Nuitka
+      run: |
+        uv add nuitka
+        
+    - name: Build executable
+      run: |
+        uv run python auto_complainer.py
+        
+    - name: Upload executable artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: biliFAV-windows-arm64
+        path: exe/
+        retention-days: 30

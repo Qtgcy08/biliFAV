@@ -87,8 +87,19 @@ def run_nuitka(current_version, new_version):
     exe_dir = Path("./exe")
     exe_dir.mkdir(parents=True, exist_ok=True)
     
-    # 生成带新版本号的输出文件名
-    output_filename = f"biliFAV_win_x64_{new_version}.exe"
+    # 检测系统架构并生成输出文件名
+    arch = platform.machine().lower()
+    if arch in ['amd64', 'x86_64']:
+        arch_name = "x64"
+    elif arch in ['i386', 'i686', 'x86']:
+        arch_name = "x86"
+    elif arch in ['arm64', 'aarch64']:
+        arch_name = "arm64"
+    else:
+        arch_name = arch
+    
+    # 生成带新版本号和架构的输出文件名
+    output_filename = f"biliFAV_win_{arch_name}_{new_version}.exe"
     
     # 获取nuitka命令
     nuitka_cmd = find_nuitka()
