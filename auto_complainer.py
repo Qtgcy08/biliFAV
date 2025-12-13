@@ -133,7 +133,7 @@ def run_nuitka(current_version, new_version):
         "--lto=yes",
         "--show-progress",
         #"--remove-output",
-        "--no-dependencies",  # Completely disable dependency analysis to avoid Dependency Walker issues
+        "--assume-yes-for-downloads",  # Automatically accept downloads to avoid Dependency Walker prompt
         source_file
     ])
 

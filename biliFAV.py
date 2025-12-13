@@ -474,19 +474,37 @@ class BiliFavDownloader:
             print(f"保存登录信息失败: {str(e)}")
     
     async def check_member_status(self) -> bool:
-        """检查用户大会员状态"""
+        """检查用户大会员状态，支持自动重新登录"""
         try:
             async with httpx.AsyncClient(headers=HEADERS, cookies=self.cookies, timeout=10.0) as client:
                 # 调用API获取用户信息
                 resp = await client.get("https://api.bilibili.com/x/web-interface/nav")
                 resp.raise_for_status()
                 data = resp.json()
+                
+                # 检查登录状态
+                if data.get("code") == -101:
+                    print("检测到登录失效，尝试重新登录...")
+                    new_token = await self.qr_login()
+                    if new_token:
+                        self.cookies = new_token["cookies"]
+                        self.token_data = new_token
+                        self.save_token(new_token)
+                        print("重新登录成功，重试会员状态检测...")
+                        # 重试一次
+                        return await self.check_member_status()
+                    else:
+                        print("重新登录失败，使用普通账号模式")
+                        return False
+                
                 if data.get("code") == 0:
-                    # 检查vipStatus字段
                     return data["data"].get("vipStatus", 0) == 1
+                else:
+                    print(f"会员状态API错误: {data.get('message')}")
+                    return False
         except Exception as e:
             print(f"检查会员状态失败: {str(e)}")
-        return False
+            return False
 
     def get_token(self) -> Dict:
         """获取当前token数据"""
@@ -643,20 +661,68 @@ class BiliFavDownloader:
         return cookies
 
     async def get_favorites(self, session: httpx.AsyncClient) -> List[Dict]:
-        """获取用户创建的收藏夹列表"""
+        """获取用户创建的收藏夹列表，支持自动重新登录"""
         try:
             print("正在获取收藏夹列表...")
+            
+            # 检查DedeUserID是否存在
+            dede_user_id = session.cookies.get("DedeUserID")
+            if not dede_user_id:
+                print("错误: 未找到DedeUserID，请重新登录")
+                return []
+            
+            # 发送API请求
             resp = await session.get(
                 "https://api.bilibili.com/x/v3/fav/folder/created/list-all",
-                params={"up_mid": session.cookies.get("DedeUserID")},  # 使用当前用户ID
+                params={"up_mid": dede_user_id},
                 timeout=30.0
             )
             resp.raise_for_status()
             data = resp.json()
+            
+            # 检查登录失效
+            if data.get("code") == -101:
+                print("检测到登录失效，尝试重新登录...")
+                new_token = await self.qr_login()
+                if new_token:
+                    # 更新session的cookies
+                    session.cookies.update(new_token["cookies"])
+                    self.cookies = new_token["cookies"]
+                    self.token_data = new_token
+                    self.save_token(new_token)
+                    print("重新登录成功，重试收藏夹API...")
+                    # 重试一次
+                    return await self.get_favorites(session)
+                else:
+                    print("重新登录失败，返回空列表")
+                    return []
+            
+            # 检查API响应状态码
             if data.get("code") != 0:
-                print(f"获取收藏夹列表失败: {data.get('message')}")
+                error_msg = data.get('message', '未知错误')
+                print(f"获取收藏夹列表失败: {error_msg}")
                 return []
-            return data["data"]["list"]  # 返回收藏夹列表
+            
+            # 检查data字段是否存在且不为None
+            if data.get("data") is None:
+                print("错误: API响应中data字段为None")
+                return []
+            
+            # 检查list字段是否存在且不为None
+            favorite_list = data["data"].get("list")
+            if favorite_list is None:
+                print("错误: API响应中list字段为None")
+                return []
+            
+            # 返回收藏夹列表
+            return favorite_list
+            
+        except httpx.TimeoutException:
+            print("获取收藏夹列表超时，请检查网络连接")
+            return []
+        except httpx.HTTPStatusError as e:
+            print(f"HTTP错误: {e.response.status_code}")
+            return []
         except Exception as e:
             print(f"获取收藏夹列表失败: {str(e)}")
             return []
@@ -667,66 +733,157 @@ class BiliFavDownloader:
         all_items = []
         page = 1
         page_size = 20  # 每页项目数
+        max_retries = 3  # 最大重试次数
+        consecutive_failures = 0  # 连续失败次数
         
         try:
             print(f"开始获取收藏夹内容，共约{media_count}项...")
             
             # 创建进度条
             pbar = tqdm(total=media_count, desc=f"收藏夹ID {media_id}", unit="项")
-            count = 0
             
             while not interrupted:
                 # 随机延迟防止请求过快
                 delay = random.uniform(0.1, 0.8)
                 await asyncio.sleep(delay)
                 
-                try:
-                    # 获取当前页内容
-                    resp = await session.get(
-                        "https://api.bilibili.com/x/v3/fav/resource/list",
-                        params={
-                            "media_id": media_id,
-                            "ps": page_size,
-                            "pn": page,
-                            "platform": "web"
-                        },
-                        timeout=30.0
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
-                    
-                    if data.get("code") != 0:
-                        if page == 1:
-                            print(f"获取收藏夹详情失败: {data.get('message')}")
-                        page += 1
-                        if page > 50:  # 防止无限循环
-                            break
-                        continue
-                    
-                    # 添加当前页项目
-                    items = data["data"].get("medias", [])
-                    all_items.extend(items)
-                    count = len(all_items)
-                    
-                    # 更新进度条
-                    pbar.update(len(items))
-                    
-                    # 检查是否还有更多页
-                    has_more = data["data"].get("has_more", 0) == 1
-                    if not has_more or len(items) < page_size:
-                        break
+                retry_count = 0
+                page_success = False
+                items = []
+                
+                # 重试机制
+                while retry_count < max_retries and not page_success and not interrupted:
+                    try:
+                        # 获取当前页内容
+                        resp = await session.get(
+                            "https://api.bilibili.com/x/v3/fav/resource/list",
+                            params={
+                                "media_id": media_id,
+                                "ps": page_size,
+                                "pn": page,
+                                "platform": "web"
+                            },
+                            timeout=30.0
+                        )
+                        resp.raise_for_status()
+                        data = resp.json()
                         
+                        if data.get("code") != 0:
+                            error_msg = data.get('message', '未知错误')
+                            if page == 1 and retry_count == 0:
+                                print(f"获取收藏夹详情失败: {error_msg}")
+                            
+                            # 如果是登录失效，尝试重新登录
+                            if data.get("code") == -101:
+                                print("检测到登录失效，尝试重新登录...")
+                                new_token = await self.qr_login()
+                                if new_token:
+                                    # 更新session的cookies
+                                    session.cookies.update(new_token["cookies"])
+                                    self.cookies = new_token["cookies"]
+                                    self.token_data = new_token
+                                    self.save_token(new_token)
+                                    print("重新登录成功，重试当前页...")
+                                    # 重试当前页
+                                    retry_count += 1
+                                    continue
+                            
+                            # 其他错误，记录并重试
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                print(f"第{page}页获取失败: {error_msg}, 第{retry_count}次重试...")
+                                await asyncio.sleep(1.0)  # 重试前等待
+                                continue
+                            else:
+                                print(f"第{page}页获取失败，已达到最大重试次数: {error_msg}")
+                                break
+                        
+                        # 成功获取数据
+                        page_success = True
+                        consecutive_failures = 0  # 重置连续失败计数
+                        
+                        # 提取项目列表
+                        items = data["data"].get("medias", [])
+                        all_items.extend(items)
+                        
+                        # 更新进度条（即使items为空也更新0）
+                        pbar.update(len(items))
+                        
+                        # 检查是否还有更多页
+                        has_more = data["data"].get("has_more", 0) == 1
+                        
+                        # 如果has_more=0，检查完成度
+                        if not has_more:
+                            current_count = len(all_items)
+                            if current_count < media_count:
+                                print(f"警告: API返回has_more=0，但只获取到{current_count}/{media_count}项")
+                                # 可以尝试继续获取下一页，但这里我们尊重API的指示
+                        
+                        # 判断是否继续获取下一页
+                        if not has_more or len(items) < page_size:
+                            # 没有更多页或当前页不满，结束循环
+                            break
+                        
+                        # 准备获取下一页
+                        page += 1
+                        if page > 50:  # 安全限制
+                            print("达到最大页数限制(50页)，停止获取")
+                            break
+                            
+                    except httpx.TimeoutException:
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            print(f"第{page}页请求超时，第{retry_count}次重试...")
+                            await asyncio.sleep(2.0)  # 超时重试等待更长时间
+                            continue
+                        else:
+                            print(f"第{page}页请求超时，已达到最大重试次数")
+                            consecutive_failures += 1
+                            break
+                    except Exception as e:
+                        retry_count += 1
+                        if retry_count < max_retries:
+                            print(f"第{page}页获取失败: {str(e)}, 第{retry_count}次重试...")
+                            await asyncio.sleep(1.0)
+                            continue
+                        else:
+                            print(f"第{page}页获取失败，已达到最大重试次数: {str(e)}")
+                            consecutive_failures += 1
+                            break
+                
+                # 如果重试后仍然失败，跳过当前页继续下一页
+                if not page_success and retry_count >= max_retries:
+                    print(f"跳过第{page}页，继续下一页...")
+                    consecutive_failures += 1
                     page += 1
-                    if page > 50:  # 安全限制
+                    # 如果连续失败太多，可能有问题，提前结束
+                    if consecutive_failures >= 5:
+                        print("连续失败过多，可能网络或API有问题，停止获取")
                         break
-                except Exception as e:
-                    print(f"获取收藏夹详情失败: {str(e)}")
-                    page += 1
-                    if page > 50:
-                        break
+                    continue
+                
+                # 检查是否应该结束循环
+                if not page_success or interrupted:
+                    break
+                
+                # 检查是否还有更多页
+                if len(items) < page_size:
+                    # 当前页不满，通常意味着没有更多数据
+                    break
             
             pbar.close()
-            print(f"获取完成: {count}/{media_count} 项")
+            current_count = len(all_items)
+            print(f"获取完成: {current_count}/{media_count} 项")
+            
+            # 检查获取完整性
+            if current_count < media_count:
+                if current_count == 0:
+                    print("警告: 未能获取到任何收藏夹内容")
+                elif current_count < media_count * 0.5:  # 获取不到一半
+                    print(f"警告: 获取不完整，只获取到{current_count}项，应有{media_count}项")
+                else:
+                    print(f"提示: 获取到{current_count}项，应有{media_count}项")
+            
             return all_items
         except Exception as e:
             print(f"\n获取收藏夹详情失败: {str(e)}")
