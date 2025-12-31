@@ -2,7 +2,6 @@
 Bilibili收藏夹视频下载器
 功能：登录B站账号，获取收藏夹列表，下载收藏夹中的视频，支持多清晰度选择和后台合并
 作者：依轨泠QTY
-版本：7.12.2
 """
 
 import asyncio
@@ -1198,12 +1197,13 @@ class BiliFavDownloader:
             print(f"获取视频分P信息失败: {str(e)}")
             return None
 
-    def parse_page_selection(self, input_str: str, total_pages: int) -> Optional[List[int]]:
+    def parse_page_selection(self, input_str: str, total_pages: int, downloaded_indices: List[int] = None) -> Optional[List[int]]:
         """
         解析用户的分P选择输入
         参数:
             input_str: 用户输入字符串
             total_pages: 总分P数量
+            downloaded_indices: 已下载的分P索引列表（可选）
         返回:
             List[int]: 选中的分P索引列表，None表示取消
         """
@@ -1217,6 +1217,21 @@ class BiliFavDownloader:
             return list(range(1, total_pages + 1))
         elif input_str in ['c', 'cancel', '取消']:
             return None
+        elif input_str == 's':
+            # 跳过所有已下载分P
+            if downloaded_indices:
+                # 返回所有未下载的分P
+                all_indices = set(range(1, total_pages + 1))
+                downloaded_set = set(downloaded_indices)
+                selected = sorted(list(all_indices - downloaded_set))
+                if not selected:
+                    print("所有分P都已下载，没有需要下载的分P")
+                    return []
+                print(f"跳过已下载分P，将下载: {', '.join(map(str, selected))}")
+                return selected
+            else:
+                print("没有已下载分P信息，将下载所有分P")
+                return list(range(1, total_pages + 1))
         
         # 替换中文逗号为英文逗号
         input_str = input_str.replace('，', ',')
@@ -1476,15 +1491,32 @@ class BiliFavDownloader:
             selected_cids = []
             if len(pages) > 1:
                 print(f"\n检测到多分P视频: {title} ({bvid})")
+                
+                # 检查已下载的分P
+                downloaded_indices = []
+                for i, page in enumerate(pages, 1):
+                    part_title = page.get("part", f"分P{i}")
+                    safe_title = sanitize_filename(part_title)
+                    safe_title = shorten_filename(safe_title)
+                    file_path = os.path.join(output_path, f"{safe_title}_{bvid}.mp4")
+                    if os.path.exists(file_path):
+                        downloaded_indices.append(i)
+                
                 print("分P列表:")
                 for i, page in enumerate(pages, 1):
                     duration_min = page.get("duration", 0) // 60
                     duration_sec = page.get("duration", 0) % 60
-                    print(f"  {i}. {page.get('part', f'分P{i}')} ({duration_min}:{duration_sec:02d})")
+                    part_title = page.get("part", f"分P{i}")
+                    # 标记已下载的分P
+                    if i in downloaded_indices:
+                        print(f"  {i}. {part_title} ({duration_min}:{duration_sec:02d}) [已下载]")
+                    else:
+                        print(f"  {i}. {part_title} ({duration_min}:{duration_sec:02d})")
                 
                 print("\n请选择要下载的分P:")
                 print("  [a/所有/all] 下载所有分P")
                 print("  [c/取消/cancel] 取消下载")
+                print("  [s] 跳过所有已下载分P")
                 print("  [数字] 下载指定分P (如: 1, 2, 3)")
                 print("  [范围] 下载范围分P (如: 1-5)")
                 print("  [混合] 混合选择 (如: 1,3,5-7)")
@@ -1492,8 +1524,8 @@ class BiliFavDownloader:
                 
                 choice = input().strip()
                 
-                # 解析用户选择
-                selected_indices = self.parse_page_selection(choice, len(pages))
+                # 解析用户选择，传入已下载分P信息
+                selected_indices = self.parse_page_selection(choice, len(pages), downloaded_indices)
                 
                 if selected_indices is None:
                     if choice and choice not in ['c', 'cancel', '取消']:
@@ -1521,13 +1553,17 @@ class BiliFavDownloader:
                 safe_title = shorten_filename(safe_title)
                 file_path = os.path.join(output_path, f"{safe_title}_{bvid}.mp4")
                 
-                # 处理已存在文件
-                if overwrite and os.path.exists(file_path):
-                    try:
-                        os.remove(file_path)
-                        print(f"已删除旧文件: {part_title} ({bvid})")
-                    except Exception as e:
-                        print(f"删除旧文件失败: {part_title} ({bvid}) - {str(e)}")
+                # 检查文件是否已存在（即使不在已下载列表中）
+                if os.path.exists(file_path):
+                    if overwrite:
+                        try:
+                            os.remove(file_path)
+                            print(f"已删除旧文件: {part_title} ({bvid})")
+                        except Exception as e:
+                            print(f"删除旧文件失败: {part_title} ({bvid}) - {str(e)}")
+                            continue
+                    else:
+                        print(f"文件已存在，跳过下载: {part_title} ({bvid})")
                         continue
                 
                 # 获取媒体URL
