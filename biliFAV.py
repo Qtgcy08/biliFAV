@@ -2,11 +2,10 @@
 Bilibili收藏夹视频下载器
 功能：登录B站账号，获取收藏夹列表，下载收藏夹中的视频，支持多清晰度选择和后台合并
 作者：依轨泠QTY
-版本：7.12.1
+版本：7.12.2
 """
 
 import asyncio
-import aiohttp
 import toml
 import qrcode
 import sqlite3
@@ -96,7 +95,7 @@ QUALITY_CODE_TO_DESC = {
 }
 
 # 非大会员账号可下载的最高清晰度代码
-NON_MEMBER_MAX_QUALITY = 80  # 1080P
+NON_MEMBER_MAX_QUALITY = 80 # 1080P
 
 # ========================
 # 全局状态变量
@@ -270,42 +269,104 @@ class BiliFavDownloader:
                 conn.close()
     
     def check_ffmpeg(self):
-        """检查系统上是否安装了FFmpeg，包括全局搜索和程序目录搜索"""
-        # 1. 首先尝试全局搜索（系统PATH）
-        global_ffmpeg_path = shutil.which("ffmpeg")
+        """
+        检查系统上是否安装了FFmpeg，支持跨平台检测
+        按照流程图逻辑：
+        1. 检测操作系统类型
+        2. Windows: 使用shutil.which进行全局检测
+        3. Unix-like (Linux/macOS): 使用which命令进行全局检测
+        4. 如果全局检测失败，进行三层向下搜索（程序目录、第一层子目录、第二层子目录）
+        5. 对找到的路径进行有效性测试
+        6. 如果所有方法都失败，尝试直接运行ffmpeg命令
+        """
+        import platform
+        
+        # 获取操作系统信息
+        system = platform.system().lower()
+        is_windows = system == "windows"
+        is_linux = system == "linux"
+        is_macos = system == "darwin"
+        
+        print(f"检测到操作系统: {platform.system()} ({platform.release()})")
+        
+        # 1. 全局检测（根据操作系统类型使用不同方法）
+        global_ffmpeg_path = None
+        
+        if is_windows:
+            # Windows: 使用shutil.which进行全局检测
+            global_ffmpeg_path = shutil.which("ffmpeg")
+            if global_ffmpeg_path:
+                print(f"Windows全局检测: 找到FFmpeg路径 - {global_ffmpeg_path}")
+        else:
+            # Unix-like (Linux/macOS): 使用which命令进行全局检测
+            try:
+                result = subprocess.run(
+                    ["which", "ffmpeg"],
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='ignore'
+                )
+                if result.returncode == 0:
+                    global_ffmpeg_path = result.stdout.strip()
+                    print(f"Unix全局检测: 找到FFmpeg路径 - {global_ffmpeg_path}")
+            except Exception as e:
+                print(f"Unix全局检测失败: {str(e)}")
+        
+        # 测试全局检测到的FFmpeg路径
         if global_ffmpeg_path and self._test_ffmpeg_path(global_ffmpeg_path):
             self.ffmpeg_path = global_ffmpeg_path
             self.ffmpeg_available = True
             print(f"FFmpeg检测成功 (全局路径: {self.ffmpeg_path}, 版本: {self.ffmpeg_version})")
             return
         
-        # 2. 搜索程序目录下的FFmpeg
+        # 2. 全局检测失败，进行三层向下搜索
+        print("全局检测失败，开始本地搜索...")
         program_dir = os.path.dirname(os.path.abspath(__file__))
-        local_ffmpeg_path = self._find_ffmpeg_in_directory(program_dir)
-        if local_ffmpeg_path and self._test_ffmpeg_path(local_ffmpeg_path):
-            self.ffmpeg_path = local_ffmpeg_path
-            self.ffmpeg_available = True
-            print(f"FFmpeg检测成功 (程序目录: {self.ffmpeg_path}, 版本: {self.ffmpeg_version})")
-            return
+        
+        # 搜索策略：程序目录 -> 第一层子目录 -> 第二层子目录
+        search_depths = [0, 1, 2]  # 0=仅程序目录，1=程序目录+第一层子目录，2=程序目录+第一层+第二层子目录
+        
+        for depth in search_depths:
+            print(f"正在搜索第{depth+1}层目录...")
+            local_ffmpeg_path = self._find_ffmpeg_in_directory(program_dir, max_depth=depth)
+            
+            if local_ffmpeg_path and self._test_ffmpeg_path(local_ffmpeg_path):
+                self.ffmpeg_path = local_ffmpeg_path
+                self.ffmpeg_available = True
+                print(f"FFmpeg检测成功 (本地搜索深度{depth}: {self.ffmpeg_path}, 版本: {self.ffmpeg_version})")
+                return
         
         # 3. 如果上述方法都失败，尝试直接运行ffmpeg命令
+        print("本地搜索失败，尝试直接运行ffmpeg命令...")
         try:
-            result = subprocess.run(
-                ["ffmpeg", "-version"],
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='ignore',
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
+            # 根据操作系统使用不同的命令
+            if is_windows:
+                result = subprocess.run(
+                    ["ffmpeg", "-version"],
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='ignore',
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+            else:
+                result = subprocess.run(
+                    ["ffmpeg", "-version"],
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='ignore'
+                )
+            
             if result.returncode == 0:
                 self.ffmpeg_available = True
                 self.ffmpeg_path = "ffmpeg"  # 使用命令名称
                 self._parse_ffmpeg_version(result.stdout)
                 print(f"FFmpeg检测成功 (命令方式, 版本: {self.ffmpeg_version})")
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"直接运行ffmpeg命令失败: {str(e)}")
         
         # 4. 所有方法都失败
         print("警告: 未检测到FFmpeg，DASH格式视频将无法合并音频")
@@ -313,14 +374,43 @@ class BiliFavDownloader:
         print("   下载地址：https://ffmpeg.org/download.html")
         self.ffmpeg_available = False
     
-    def _find_ffmpeg_in_directory(self, directory: str) -> Optional[str]:
-        """在指定目录中搜索FFmpeg可执行文件"""
+    def _find_ffmpeg_in_directory(self, directory: str, max_depth: int = 2) -> Optional[str]:
+        """
+        在指定目录中搜索FFmpeg可执行文件，支持多层向下搜索
+        参数:
+            directory: 起始搜索目录
+            max_depth: 最大搜索深度（0=仅当前目录，1=当前目录+第一层子目录，2=当前目录+第一层+第二层子目录）
+        返回:
+            FFmpeg可执行文件路径，如果未找到则返回None
+        """
         ffmpeg_names = ["ffmpeg", "ffmpeg.exe", "ffmpeg.bat"]
         
-        for root, dirs, files in os.walk(directory):
-            for file in files:
-                if file.lower() in ffmpeg_names:
-                    return os.path.join(root, file)
+        # 搜索当前目录
+        for file in os.listdir(directory):
+            file_path = os.path.join(directory, file)
+            if os.path.isfile(file_path) and file.lower() in ffmpeg_names:
+                return file_path
+        
+        # 如果允许深度搜索，搜索子目录
+        if max_depth > 0:
+            for item in os.listdir(directory):
+                item_path = os.path.join(directory, item)
+                if os.path.isdir(item_path):
+                    # 搜索第一层子目录
+                    for sub_file in os.listdir(item_path):
+                        sub_file_path = os.path.join(item_path, sub_file)
+                        if os.path.isfile(sub_file_path) and sub_file.lower() in ffmpeg_names:
+                            return sub_file_path
+                    
+                    # 如果允许第二层深度搜索，搜索第二层子目录
+                    if max_depth > 1:
+                        for sub_item in os.listdir(item_path):
+                            sub_item_path = os.path.join(item_path, sub_item)
+                            if os.path.isdir(sub_item_path):
+                                for sub_sub_file in os.listdir(sub_item_path):
+                                    sub_sub_file_path = os.path.join(sub_item_path, sub_sub_file)
+                                    if os.path.isfile(sub_sub_file_path) and sub_sub_file.lower() in ffmpeg_names:
+                                        return sub_sub_file_path
         
         return None
     
