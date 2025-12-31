@@ -131,7 +131,6 @@ def run_nuitka(current_version, new_version):
         #"--clang",
         "--msvc=latest",
         "--lto=yes",
-        "--show-progress",
         #"--remove-output",
         "--assume-yes-for-downloads",  # Automatically accept downloads to avoid Dependency Walker prompt
         source_file

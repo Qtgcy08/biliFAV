@@ -3,10 +3,19 @@ description: "处理git事务，推送到仓库，并询问用户是否编译"
 ---
 git status
 git diff 查看更改
-git add 暂存变更文件
-询问用户是否更新 ./pyproject.toml中的版本号
-git commit 提交变更，忽略测试代码
-git pull 拉取远程变更
-git pull 提交到远程仓库
+询问用户是否更新 ./pyproject.toml 中的版本号
 询问用户是否运行 ./auto_complainer.py
-根据编译后的新版本号添加tag
+git add 暂存变更文件，忽略测试代码
+添加版本号tag "x.xx.x"
+git commit 提交变更
+```git commit
+提交类型(如fix):变更摘要
+
+- 版本：x.xx.x → x.xx.x
+- 变更1的详细描述
+- 变更2的详细描述
+…
+
+```
+git pull 拉取远程变更
+git push 提交到远程仓库
