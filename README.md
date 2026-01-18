@@ -44,6 +44,108 @@ uv sync
 uv run python biliFAV.py
 ```
 
+## 🖥️ 非交互式命令行使用
+
+BiliFAV现在支持非交互式命令行操作，适合自动化和脚本使用。
+
+### 基本用法
+
+```bash
+# 显示帮助信息
+python biliFAV.py --help
+
+# 显示版本信息
+python biliFAV.py --version
+
+# 交互模式 (默认)
+python biliFAV.py
+
+# 使用配置文件
+python biliFAV.py --config config.toml [命令]
+```
+
+### 收藏夹下载模式
+
+```bash
+# 下载指定收藏夹
+python biliFAV.py favorite --favorite-id 1735679389 --quality 1080P --output-dir ./downloads
+
+# 强制更新收藏夹数据
+python biliFAV.py favorite --favorite-id 1735679389 --force-update
+
+# 设置文件覆盖策略
+python biliFAV.py favorite --favorite-id 1735679389 --overwrite skip  # 跳过已存在文件
+python biliFAV.py favorite --favorite-id 1735679389 --overwrite all   # 覆盖所有文件
+```
+
+### 直接下载模式
+
+```bash
+# 下载单个视频 (支持BV号、链接)
+python biliFAV.py direct BV1zsnBzGEzC --quality 720P --output-dir ./videos
+
+# 使用视频链接
+python biliFAV.py direct "https://www.bilibili.com/video/BV1zsnBzGEzC/" --quality 1080P
+```
+
+### 批处理模式
+
+```bash
+# 从JSON文件批量下载
+python biliFAV.py batch --file tasks.json --output-dir ./batch_downloads
+```
+
+### 配置文件示例
+
+创建 `config.toml` 文件：
+
+```toml
+[general]
+default_download_path = "./downloads"
+max_retries = 3
+timeout = 30
+concurrent_downloads = 3
+verbose = false
+
+[quality]
+default_quality = "1080P"
+available_qualities = ["4K", "1080P60", "1080P+", "1080P", "720P60", "720P", "480P", "360P", "最低"]
+
+[paths]
+favorite_download_path = "./favourite_download"
+direct_download_path = "./direct_download"
+batch_download_path = "./batch_download"
+
+[file_handling]
+default_overwrite_policy = "skip"
+max_filename_length = 180
+keep_emoji = true
+```
+
+### 批处理任务文件示例
+
+创建 `tasks.json` 文件：
+
+```json
+[
+  {
+    "type": "favorite",
+    "favorite_id": 1735679389,
+    "quality": "1080P",
+    "output_dir": "./downloads/favorite1",
+    "force_update": false,
+    "overwrite": "skip"
+  },
+  {
+    "type": "direct",
+    "video_identifier": "BV1zsnBzGEzC",
+    "quality": "720P",
+    "output_dir": "./downloads/video1",
+    "overwrite": "skip"
+  }
+]
+```
+
 ## 📋 必需依赖：FFmpeg
 
 BiliFAV需要FFmpeg来合并高清晰度视频的音视频流。

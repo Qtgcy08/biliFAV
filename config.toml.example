@@ -1,0 +1,80 @@
+# BiliFAV 配置文件示例
+# 复制此文件为 config.toml 并修改配置
+
+[general]
+# 默认下载路径
+default_download_path = "./downloads"
+# 最大重试次数
+max_retries = 3
+# 请求超时时间（秒）
+timeout = 30
+# 并发下载数量
+concurrent_downloads = 3
+# 是否启用详细日志
+verbose = false
+
+[quality]
+# 默认清晰度
+default_quality = "1080P"
+# 可用清晰度列表（按优先级排序）
+available_qualities = ["4K", "1080P60", "1080P+", "1080P", "720P60", "720P", "480P", "360P", "最低"]
+
+[ffmpeg]
+# 是否自动检测FFmpeg
+auto_detect = true
+# 自定义FFmpeg路径（留空则自动检测）
+custom_path = ""
+# FFmpeg合并线程数
+merge_threads = 2
+
+[network]
+# User-Agent头
+user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+# 代理设置（格式: http://user:pass@host:port）
+proxy = ""
+# 请求延迟（秒，防止请求过快）
+request_delay = 0.5
+
+[database]
+# 缓存过期时间（天）
+cache_expiry_days = 7
+# 是否自动更新缓存
+auto_update = true
+# 数据库文件路径
+db_file = ".get_my_favourite.sqlite"
+
+[file_handling]
+# 默认文件覆盖策略: skip=跳过, overwrite=询问, all=全部覆盖
+default_overwrite_policy = "skip"
+# 文件名最大长度
+max_filename_length = 180
+# 是否保留emoji表情
+keep_emoji = true
+
+[paths]
+# 收藏夹下载默认路径
+favorite_download_path = "./favourite_download"
+# 直接下载默认路径
+direct_download_path = "./direct_download"
+# 批处理下载默认路径
+batch_download_path = "./batch_download"
+
+# 任务文件示例（用于批处理模式）
+# 创建 tasks.json 文件，内容如下：
+# [
+#   {
+#     "type": "favorite",
+#     "favorite_id": 1735679389,
+#     "quality": "1080P",
+#     "output_dir": "./downloads/favorite1",
+#     "force_update": false,
+#     "overwrite": "skip"
+#   },
+#   {
+#     "type": "direct",
+#     "video_identifier": "BV1zsnBzGEzC",
+#     "quality": "720P",
+#     "output_dir": "./downloads/video1",
+#     "overwrite": "skip"
+#   }
+# ]
